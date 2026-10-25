@@ -1,0 +1,349 @@
+<!DOCTYPE html>
+<html lang="ca">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>VisionGuard · Classificador d'imatges</title>
+
+  <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@latest/dist/tf.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@teachablemachine/image@0.8.5/dist/teachablemachine-image.min.js"></script>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+  <header class="top">
+    <div class="brand">
+      <div><strong>VisionGuard</strong><span>Control de duana · classificador d'imatges</span></div>
+    </div>
+    <p class="employee">Codi d'empleat: <b>00001</b></p>
+    <div class="top-right">
+      <div class="status" id="status" data-state="loading"><span class="dot"></span><span id="statusText">Carregant el model…</span></div>
+      <time id="clock"></time>
+      <button type="button" class="emergency" id="emergencyBtn" aria-pressed="false">Emergència</button>
+    </div>
+  </header>
+
+  <nav class="tabs" role="tablist" aria-label="Seccions">
+    <button type="button" class="tab" role="tab" data-tab="scan" aria-selected="true">Escàner</button>
+    <button type="button" class="tab" role="tab" data-tab="classes" aria-selected="false">Classes per perill</button>
+  </nav>
+
+  <main class="grid" id="scanView">
+
+    <aside class="col left">
+      <h2>Classes del model</h2>
+      <ul class="class-list" id="classList"><li>Carregant…</li></ul>
+      <h2>Historial recent</h2>
+      <ol class="history" id="history"></ol>
+      <p class="empty-note" id="historyEmpty">Encara no hi ha cap anàlisi.</p>
+      <div class="stats">
+        <div><span>Anàlisis del torn</span><strong id="statTotal">0</strong></div>
+        <div class="alerts"><span>Alertes vermelles</span><strong id="statAlerts">0</strong></div>
+      </div>
+    </aside>
+
+    <section class="col center">
+      <div class="bar">
+        <h2>Escàner d'inspecció</h2>
+        <div class="actions">
+          <label class="btn" id="uploadBtn" aria-disabled="true">
+            Carregar imatge
+            <input type="file" id="fileInput" accept="image/*" disabled />
+          </label>
+          <button type="button" class="btn ghost" id="camBtn" disabled>Càmera</button>
+          <button type="button" class="btn" id="snapBtn" hidden>Capturar</button>
+          <button type="button" class="btn ghost" id="stopBtn" hidden>Cancel·lar</button>
+        </div>
+      </div>
+      <div class="stage" id="stage">
+        <div class="frame" id="frame">
+          <img id="preview" alt="Imatge seleccionada" hidden />
+          <video id="video" autoplay playsinline muted hidden></video>
+          <p class="hint" id="hint">Arrossega una imatge aquí o carrega'n una per classificar-la.</p>
+          <div class="scanline"></div>
+          <span class="tag" id="tag"></span>
+        </div>
+      </div>
+    </section>
+
+    <aside class="col right">
+      <h2>Detalls de la classificació</h2>
+      <div class="card" id="detail">
+        <div class="main-obj">
+          <h3 id="objName">Sense resultat</h3>
+          <span class="badge" id="objBadge" hidden></span>
+        </div>
+        <div class="metrics">
+          <div class="metric"><small>Confiança</small><strong id="objConf">—</strong></div>
+          <div class="metric"><small>Categoria</small><strong id="objCat">—</strong></div>
+        </div>
+        <div class="action"><small>Acció recomanada</small><span id="objAction">Carrega una imatge per començar.</span></div>
+      </div>
+      <h2>Probabilitat per classe</h2>
+      <div class="classes" id="classes"></div>
+    </aside>
+
+  </main>
+
+  <section class="classes-view" id="classesView" hidden aria-label="Classes classificades per perill">
+    <p class="empty-note">Carregant les classes del model…</p>
+  </section>
+
+  <div class="lock" id="lock" role="alert" hidden>
+    <div>
+      <h2>Emergència activa</h2>
+      <p>S'ha enviat un avís d'emergència (simulació: no es fa cap trucada real). Tota l'aplicació està bloquejada. Prem «Reprendre» a dalt a la dreta per continuar.</p>
+    </div>
+  </div>
+
+  <p class="mark mark-left">Alpha 1.0</p>
+  <p class="mark mark-right">Versió 1 - Héctor Corral EMT<br>Projecte allotjat en Render<br>Github: hector23032025</p>
+
+  <script>
+    // ---- Configuració ----
+    const URL = "./model.1/";
+    const THRESHOLD = 0.6; // per sota d'aquesta confiança es demana revisió manual
+
+    // Categoria de cada classe segons el nom (ajusta les expressions si canvies els noms al model)
+    const CATEGORIES = {
+      threat: { label: "Amenaça", status: "Alerta",       color: "var(--red)",   action: "Objecte de prioritat màxima. Atura el pas i avisa l'operari per a la revisió manual." },
+      review: { label: "Revisió", status: "En revisió",   color: "var(--amber)", action: "Cal revisar manualment el contingut abans de deixar-lo passar." },
+      safe:   { label: "Inofensiu", status: "Autoritzat", color: "var(--green)", action: "Cap acció necessària." },
+      low:    { label: "Incert",  status: "Revisió manual", color: "var(--amber)", action: "La confiança és inferior al llindar (" + Math.round(THRESHOLD * 100) + " %). Revisa la imatge manualment." }
+    };
+    function categoryOf(name) {
+      const n = name.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
+      if (/tisor|tijera|ganivet|navaja|cuchill|arma|pistola|foc/.test(n)) return "threat";
+      if (/pols|polvo|narcot|ampolla|liquid|botella/.test(n)) return "review";
+      return "safe";
+    }
+    const pct = (p) => (p * 100).toFixed(1).replace(".", ",") + " %";
+
+    // ---- Elements ----
+    const $ = (id) => document.getElementById(id);
+    const fileInput = $("fileInput"), uploadBtn = $("uploadBtn"), preview = $("preview"), frame = $("frame"),
+          stage = $("stage"), hint = $("hint"), tag = $("tag"), historyEl = $("history");
+    let model, history = [], total = 0, alerts = 0, busy = false, classNames = [];
+
+    // ---- Estat i rellotge ----
+    let emergency = false, lastStatus = { state: "loading", text: "Carregant el model…" };
+    function setStatus(state, text) {
+      lastStatus = { state, text };
+      if (emergency) return;
+      $("status").dataset.state = state; $("statusText").textContent = text;
+    }
+    function tick() { $("clock").textContent = new Date().toLocaleString("ca-ES", { dateStyle: "short", timeStyle: "medium" }); }
+    tick(); setInterval(tick, 1000);
+
+    // ---- Càrrega del model ----
+    async function init() {
+      if (location.protocol === "file:") {
+        setStatus("error", "Obre la pàgina amb un servidor local (p. ex. python -m http.server)");
+        return;
+      }
+      model = await tmImage.load(URL + "model.json", URL + "metadata.json");
+      classNames = model.getClassLabels ? model.getClassLabels() : [];
+      renderClasses();
+      fileInput.disabled = false;
+      uploadBtn.removeAttribute("aria-disabled");
+      camBtn.disabled = false;
+      setStatus("ok", "Model carregat");
+    }
+
+    // ---- Entrada d'imatge ----
+    function loadFile(file) {
+      if (!file || !file.type.startsWith("image/") || !model || busy || emergency) return;
+      stopCamera();
+      const reader = new FileReader();
+      reader.onload = (e) => {
+        if (preview.src === e.target.result) classify(); // mateixa imatge: no hi ha esdeveniment load
+        else preview.src = e.target.result;
+      };
+      reader.readAsDataURL(file);
+    }
+    fileInput.addEventListener("change", (e) => { loadFile(e.target.files[0]); fileInput.value = ""; });
+    ["dragover", "dragenter"].forEach((ev) => stage.addEventListener(ev, (e) => { e.preventDefault(); stage.classList.add("drag"); }));
+    ["dragleave", "drop"].forEach((ev) => stage.addEventListener(ev, (e) => { e.preventDefault(); stage.classList.remove("drag"); }));
+    stage.addEventListener("drop", (e) => loadFile(e.dataTransfer.files[0]));
+
+    // ---- Classes i perill ----
+    const RISK_ORDER = { threat: 0, review: 1, safe: 2 };
+    const RISK_DESC = {
+      threat: "Objectes de prioritat màxima. Una detecció aturaria el pas i avisaria l'operari.",
+      review: "Objectes que cal revisar manualment abans de deixar-los passar.",
+      safe:   "Objectes quotidians i freqüents, sense risc per se."
+    };
+    function renderClasses() {
+      const sorted = [...classNames].sort((a, b) => RISK_ORDER[categoryOf(a)] - RISK_ORDER[categoryOf(b)]);
+      const list = $("classList"); list.replaceChildren();
+      sorted.forEach((name) => {
+        const c = CATEGORIES[categoryOf(name)];
+        const li = document.createElement("li"); li.dataset.name = name; li.style.setProperty("--c", c.color);
+        const n = document.createElement("span"); n.textContent = name;
+        const s = document.createElement("small"); s.textContent = c.label;
+        li.append(n, s); list.appendChild(li);
+      });
+      const view = $("classesView"); view.replaceChildren();
+      ["threat", "review", "safe"].forEach((key) => {
+        const c = CATEGORIES[key], names = sorted.filter((n) => categoryOf(n) === key);
+        const card = document.createElement("article"); card.className = "risk"; card.style.setProperty("--c", c.color);
+        const h3 = document.createElement("h3"); h3.textContent = c.label + " (" + names.length + ")";
+        const p = document.createElement("p"); p.textContent = RISK_DESC[key];
+        const ul = document.createElement("ul");
+        names.forEach((n) => { const li = document.createElement("li"); li.textContent = n; ul.appendChild(li); });
+        if (!names.length) { const li = document.createElement("li"); li.textContent = "Cap classe"; ul.appendChild(li); }
+        card.append(h3, p, ul); view.appendChild(card);
+      });
+    }
+
+    // ---- Pestanyes ----
+    document.querySelectorAll(".tab").forEach((tab) => tab.addEventListener("click", () => {
+      stopCamera();
+      document.querySelectorAll(".tab").forEach((t) => t.setAttribute("aria-selected", String(t === tab)));
+      $("scanView").hidden = tab.dataset.tab !== "scan";
+      $("classesView").hidden = tab.dataset.tab !== "classes";
+    }));
+
+    // ---- Emergència (bloqueja tota la web fins que es torna a prémer) ----
+    $("emergencyBtn").addEventListener("click", () => {
+      emergency = !emergency;
+      document.body.classList.toggle("emergency", emergency);
+      $("lock").hidden = !emergency;
+      $("emergencyBtn").textContent = emergency ? "Reprendre" : "Emergència";
+      $("emergencyBtn").setAttribute("aria-pressed", String(emergency));
+      if (emergency) {
+        stopCamera();
+        $("status").dataset.state = "error"; $("statusText").textContent = "Emergència activa";
+      } else {
+        $("status").dataset.state = lastStatus.state; $("statusText").textContent = lastStatus.text;
+      }
+    });
+
+    // ---- Càmera ----
+    const video = $("video"), camBtn = $("camBtn"), snapBtn = $("snapBtn"), stopBtn = $("stopBtn");
+    const HINT = hint.textContent;
+    let stream = null;
+
+    async function startCamera() {
+      if (busy || stream || emergency) return;
+      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+        hint.textContent = "Aquest navegador o aquesta adreça no permet usar la càmera (cal HTTPS o localhost).";
+        hint.hidden = false; return;
+      }
+      try {
+        stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment" }, audio: false });
+      } catch (err) {
+        console.error(err);
+        hint.textContent = "No s'ha pogut accedir a la càmera. Comprova els permisos del navegador.";
+        hint.hidden = false; return;
+      }
+      video.srcObject = stream;
+      video.hidden = false; hint.hidden = true; hint.textContent = HINT;
+      camBtn.hidden = true; snapBtn.hidden = false; stopBtn.hidden = false;
+    }
+
+    function stopCamera() {
+      if (stream) stream.getTracks().forEach((t) => t.stop());
+      stream = null; video.srcObject = null; video.hidden = true;
+      camBtn.hidden = false; snapBtn.hidden = true; stopBtn.hidden = true;
+      hint.textContent = HINT; hint.hidden = !preview.hidden;
+    }
+
+    function snap() {
+      if (!stream || !video.videoWidth) return;
+      const canvas = document.createElement("canvas");
+      canvas.width = video.videoWidth; canvas.height = video.videoHeight;
+      canvas.getContext("2d").drawImage(video, 0, 0);
+      const url = canvas.toDataURL("image/jpeg", 0.92);
+      stopCamera();
+      preview.hidden = false; hint.hidden = true;
+      if (preview.src === url) classify(); else preview.src = url;
+    }
+    camBtn.addEventListener("click", startCamera);
+    snapBtn.addEventListener("click", snap);
+    stopBtn.addEventListener("click", stopCamera);
+
+    // Quan la imatge està carregada, es classifica automàticament
+    let fromHistory = false;
+    preview.addEventListener("load", () => { if (fromHistory) { fromHistory = false; return; } classify(); });
+
+    async function classify() {
+      busy = true;
+      preview.hidden = false; hint.hidden = true; tag.textContent = "";
+      frame.classList.add("scanning");
+      const sleep = new Promise((r) => setTimeout(r, 700)); // deixa veure l'escaneig
+      try {
+        const [prediction] = await Promise.all([model.predict(preview), sleep]);
+        prediction.sort((a, b) => b.probability - a.probability);
+        const entry = { src: preview.src, prediction, time: new Date(), id: "ESC-" + String(++total).padStart(4, "0") };
+        const cat = verdict(prediction[0]);
+        if (cat === "threat") alerts++;
+        history.unshift(entry); history = history.slice(0, 8);
+        show(entry); renderHistory(); renderStats();
+      } catch (err) {
+        console.error(err);
+        $("objAction").textContent = "No s'ha pogut classificar la imatge.";
+      }
+      frame.classList.remove("scanning");
+      busy = false;
+    }
+
+    function verdict(best) { return best.probability < THRESHOLD ? "low" : categoryOf(best.className); }
+
+    // ---- Pintat ----
+    function show(entry) {
+      stopCamera();
+      const best = entry.prediction[0], key = verdict(best), c = CATEGORIES[key];
+      frame.style.setProperty("--cat", c.color); $("detail").style.setProperty("--cat", c.color);
+      preview.hidden = false; hint.hidden = true;
+      tag.textContent = pct(best.probability);
+      document.querySelectorAll("#classList li").forEach((li) => li.classList.toggle("on", li.dataset.name === best.className));
+      $("objName").textContent = best.className;
+      const badge = $("objBadge"); badge.hidden = false; badge.textContent = c.status;
+      $("objConf").textContent = pct(best.probability);
+      $("objCat").textContent = key === "low" ? c.label + " (" + CATEGORIES[categoryOf(best.className)].label.toLowerCase() + ")" : c.label;
+      $("objAction").textContent = c.action;
+
+      const box = $("classes"); box.replaceChildren();
+      entry.prediction.forEach((p, i) => {
+        const row = document.createElement("div"); row.className = "cls" + (i === 0 ? " top-class" : "");
+        const n = document.createElement("span"); n.textContent = p.className;
+        const v = document.createElement("span"); v.textContent = pct(p.probability);
+        const track = document.createElement("div"); track.className = "track";
+        const fill = document.createElement("div"); fill.className = "fill"; fill.style.width = (p.probability * 100) + "%";
+        track.appendChild(fill); row.append(n, v, track); box.appendChild(row);
+      });
+    }
+
+    function renderHistory() {
+      historyEl.replaceChildren();
+      $("historyEmpty").hidden = history.length > 0;
+      history.forEach((entry) => {
+        const best = entry.prediction[0], c = CATEGORIES[verdict(best)];
+        const li = document.createElement("li");
+        const btn = document.createElement("button"); btn.className = "item"; btn.type = "button";
+        btn.style.setProperty("--c", c.color);
+        const img = document.createElement("img"); img.src = entry.src; img.alt = "";
+        const mid = document.createElement("div");
+        const id = document.createElement("b"); id.textContent = entry.id;
+        const st = document.createElement("small"); st.textContent = c.status + " · " + best.className;
+        mid.append(id, st);
+        const t = document.createElement("time"); t.textContent = entry.time.toLocaleTimeString("ca-ES", { hour: "2-digit", minute: "2-digit" });
+        btn.append(img, mid, t);
+        btn.addEventListener("click", () => {
+          if (busy) return;
+          if (preview.src !== entry.src) { fromHistory = true; preview.src = entry.src; }
+          show(entry);
+        });
+        li.appendChild(btn); historyEl.appendChild(li);
+      });
+    }
+    function renderStats() { $("statTotal").textContent = total; $("statAlerts").textContent = alerts; }
+
+    init().catch((error) => {
+      console.error("Error:", error);
+      setStatus("error", "No s'ha pogut carregar el model");
+    });
+  </script>
+</body>
+</html>

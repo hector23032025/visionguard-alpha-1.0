@@ -1,6 +1,6 @@
 * { box-sizing: border-box; margin: 0; padding: 0; }
 :root {
-  /* Paleta tipo Aena (verde, blanco y grises). Cambia aquí los valores si quieres ajustar los tonos exactos */
+  /* Paleta tipus Aena (verde, blanco y grises).
   --aena-green: #00a24a;
   --aena-green-dark: #007a38;
   --aena-bg: #f2f4f5;

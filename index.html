@@ -22,6 +22,7 @@
   <nav class="tabs">
     <button type="button" class="tab on" data-tab="scan">Escàner</button>
     <button type="button" class="tab" data-tab="risk">Classes per perill</button>
+    <button type="button" class="tab" data-tab="val">Validació</button>
   </nav>
 
   <main class="cols" id="scanView">
@@ -51,6 +52,19 @@
   </main>
 
   <main class="risk-grid" id="riskView" hidden></main>
+
+  <main id="valView" hidden>
+    <section class="box">
+      <h2>Validació per carpeta</h2>
+      <p class="note">Tria una carpeta amb imatges i s'analitzaran totes de cop. Cal un ordinador (al mòbil no sol funcionar).</p>
+      <div class="actions left">
+        <label class="btn" id="folderBtn" aria-disabled="true">Triar carpeta<input type="file" id="folderInput" webkitdirectory multiple disabled /></label>
+        <button type="button" class="btn" id="copyBtn" disabled>Copiar taula</button>
+      </div>
+      <p class="note" id="valStatus"></p>
+      <div class="thumbs" id="thumbs"></div>
+    </section>
+  </main>
 
   <div class="lock" id="lock" role="alert" hidden>
     <div>
@@ -99,6 +113,7 @@
       classNames = model.getClassLabels ? model.getClassLabels() : [];
       renderClasses();
       fileInput.disabled = false; camBtn.disabled = false; uploadBtn.removeAttribute("aria-disabled");
+      $("folderInput").disabled = false; $("folderBtn").removeAttribute("aria-disabled");
       setStatus("Model carregat");
     }
 
@@ -204,11 +219,49 @@
       });
     }
 
+
+    // ---- Validació per carpeta ----
+    // Atenció: "URL" és el nom de la carpeta del model, per això s'usa window.URL per als fitxers locals
+    const folderInput = $("folderInput"), copyBtn = $("copyBtn"), valStatus = $("valStatus");
+    let valRows = [], valUrls = [];
+    folderInput.addEventListener("change", async (e) => {
+      const files = [...e.target.files].filter((f) => f.type.startsWith("image/"))
+        .sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }));
+      folderInput.value = "";
+      if (!files.length) { valStatus.textContent = "No s'ha trobat cap imatge a la carpeta."; return; }
+      if (!model || busy || emergency) return;
+      busy = true; copyBtn.disabled = true; valRows = [];
+      valUrls.forEach((u) => window.URL.revokeObjectURL(u)); valUrls = [];
+      $("thumbs").replaceChildren();
+      for (let i = 0; i < files.length; i++) {
+        if (emergency) { valStatus.textContent = "Aturat per emergència."; break; }
+        valStatus.textContent = "Analitzant " + (i + 1) + " de " + files.length + "…";
+        const url = window.URL.createObjectURL(files[i]); valUrls.push(url);
+        const card = mk("div", undefined, "thumb"), img = document.createElement("img");
+        img.alt = ""; img.src = url; card.appendChild(img); $("thumbs").appendChild(card);
+        try {
+          await img.decode();
+          const best = (await model.predict(img)).sort((a, b) => b.probability - a.probability)[0];
+          paint(card, verdict(best));
+          const info = mk("div"); info.append(mk("b", best.className), mk("span", pct(best.probability)), mk("small", files[i].name));
+          card.appendChild(info);
+          valRows.push([files[i].name, best.className, best.probability]);
+        } catch (err) { console.error(err); card.appendChild(mk("div", "Error amb la imatge")); }
+      }
+      if (!emergency) valStatus.textContent = "Analitzades: " + valRows.length + " de " + files.length + " imatges.";
+      copyBtn.disabled = !valRows.length; busy = false;
+    });
+    copyBtn.addEventListener("click", async () => {
+      const text = valRows.map(([n, c, p]) => n + "\t" + c + "\t" + p.toFixed(2).replace(".", ",")).join("\n");
+      try { await navigator.clipboard.writeText(text); valStatus.textContent = "Taula copiada (nom, classe predita, confiança): enganxa-la a l'Excel."; }
+      catch (err) { valStatus.textContent = "No s'ha pogut copiar (cal HTTPS o localhost)."; }
+    });
+
     // ---- Pestanyes ----
     document.querySelectorAll(".tab").forEach((tab) => tab.addEventListener("click", () => {
       stopCamera();
       document.querySelectorAll(".tab").forEach((t) => t.classList.toggle("on", t === tab));
-      $("scanView").hidden = tab.dataset.tab !== "scan"; $("riskView").hidden = tab.dataset.tab !== "risk";
+      ["scan", "risk", "val"].forEach((k) => { $(k + "View").hidden = tab.dataset.tab !== k; });
     }));
 
     // ---- Emergència (bloqueja tota la web fins que es torna a prémer) ----

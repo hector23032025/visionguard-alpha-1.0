@@ -1,6 +1,6 @@
 * { box-sizing: border-box; margin: 0; padding: 0; }
 :root {
-  /* Paleta tipo Aena (verde, blanco y grises).*/
+  /* Paleta tipo Aena (verde, blanco y grises). Cambia aquí los valores si quieres ajustar los tonos exactos */
   --aena-green: #00a24a;
   --aena-green-dark: #007a38;
   --aena-bg: #f2f4f5;
@@ -72,7 +72,8 @@ body.emergency .emergency { background: #f0a500; color: #000; }
 .risk p { margin-bottom: 10px; font-size: 14px; opacity: .9; }
 
 /* Emergència i marques */
-.lock { position: fixed; inset: 0; z-index: 20; display: grid; place-items: center; padding: 24px; text-align: center; background: rgba(110,10,24,.9); color: #fff; }
+.lock { position: fixed; inset: 0; z-index: 20; display: none; place-items: center; padding: 24px; text-align: center; background: rgba(110,10,24,.9); color: #fff; }
+.lock:not([hidden]) { display: grid; }
 .lock h2 { font-size: 30px; font-style: normal; }
 .lock p { max-width: 46ch; }
 .mark { position: fixed; bottom: 8px; z-index: 5; font-size: 12px; line-height: 1.4; color: var(--aena-grey); opacity: .7; pointer-events: none; }
@@ -87,3 +88,13 @@ body.emergency .emergency { background: #f0a500; color: #000; }
 @media (prefers-reduced-motion: reduce) { .frame.scanning .scan { animation: none; top: 50%; } }
 #history li { padding: 0; background: none; border: 0; }
 #history li.note { padding: 6px 0; }
+
+/* Validació per carpeta */
+#valView { max-width: 1000px; margin: 20px auto; padding: 0 20px; }
+.actions.left { justify-content: flex-start; margin: 12px 0; }
+.thumbs { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 12px; margin-top: 12px; }
+.thumb { background: #fff; border: 1px solid var(--aena-line); border-top: 5px solid var(--c); border-radius: 8px; overflow: hidden; font-size: 14px; }
+.thumb img { display: block; width: 100%; aspect-ratio: 1; object-fit: cover; }
+.thumb div { padding: 6px 8px; }
+.thumb b { display: block; }
+.thumb small { display: block; color: var(--aena-grey); font-size: 11px; word-break: break-all; }

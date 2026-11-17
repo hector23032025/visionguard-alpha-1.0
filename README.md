@@ -1,2 +1,2 @@
 # visionguard-2.0
-primer model, aproximadament 80 imatges per classe etiquetada, esperant validació per millorar-lo, fins ara fotos força bàsiques.
+segon model, aproximadament 200 imatges per classe etiquetada.

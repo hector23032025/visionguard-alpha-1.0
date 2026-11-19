@@ -1,3 +1,4 @@
+
 <!DOCTYPE html>
 <html lang="ca">
 <head>
@@ -28,6 +29,13 @@
   <main class="cols" id="scanView">
     <section class="box">
       <h2>Classes del model</h2>
+
+      <label for="modelSelect">Versió del model:</label>
+      <select id="modelSelect">
+        <option value="1">VisionGuard 1.0</option>
+        <option value="2">VisionGuard 2.0</option>
+      </select>
+
       <ul id="classList"><li>Carregant…</li></ul>
       <p id="stats">Anàlisis: 0 · Alertes vermelles: 0</p>
     </section>
@@ -39,13 +47,16 @@
         <button type="button" class="btn" id="snapBtn" hidden>Capturar</button>
         <button type="button" class="btn" id="stopBtn" hidden>Cancel·lar</button>
       </div>
+
       <div class="frame" id="frame">
         <img id="preview" alt="Imatge seleccionada" hidden />
         <video id="video" autoplay playsinline muted hidden></video>
         <p id="hint">Carrega una imatge o fes una foto amb la càmera.</p>
         <div class="scan"></div>
       </div>
+
       <div id="result"></div>
+
       <h2>Historial</h2>
       <ol id="history"><li class="note">Encara no hi ha cap anàlisi.</li></ol>
     </section>
@@ -57,10 +68,12 @@
     <section class="box">
       <h2>Validació per carpeta</h2>
       <p class="note">Tria una carpeta amb imatges i s'analitzaran totes de cop. Cal un ordinador (al mòbil no sol funcionar).</p>
+
       <div class="actions left">
         <label class="btn" id="folderBtn" aria-disabled="true">Triar carpeta<input type="file" id="folderInput" webkitdirectory multiple disabled /></label>
         <button type="button" class="btn" id="copyBtn" disabled>Copiar taula</button>
       </div>
+
       <p class="note" id="valStatus"></p>
       <div class="thumbs" id="thumbs"></div>
     </section>
@@ -77,203 +90,714 @@
   <p class="mark r">Versió 1 - Héctor Corral EMT<br>Projecte allotjat en Render<br>Github: hector23032025</p>
 
   <script>
-    const URL = "./model.1/";
+    // ---- Configuració dels models ----
+
+    const MODEL_PATHS = {
+      "1": "./model.1/",
+      "2": "./model.2/"
+    };
+
+    let currentVersion = "1";
+
     const THRESHOLD = 0.6; // per sota d'aquesta confiança es demana revisió manual
 
-    // Categoria segons el nom de la classe (ajusta les expressions si canvies els noms al model)
+    // Categoria segons el nom de la classe
     const CAT = {
-      threat: { label: "Amenaça",   status: "Alerta",         color: "#c0392b", text: "#fff", desc: "Objectes de prioritat màxima.",       action: "Atura el pas i avisa l'operari per a la revisió manual." },
-      review: { label: "Revisió",   status: "En revisió",     color: "#f0a500", text: "#000", desc: "Cal revisar-los manualment.",        action: "Cal revisar manualment el contingut abans de deixar-lo passar." },
-      safe:   { label: "Inofensiu", status: "Autoritzat",     color: "#2e8b57", text: "#fff", desc: "Objectes quotidians i freqüents.",   action: "Cap acció necessària." },
-      low:    { label: "Incert",    status: "Revisió manual", color: "#f0a500", text: "#000", desc: "",                                   action: "La confiança és inferior al " + Math.round(THRESHOLD * 100) + " %. Revisa la imatge manualment." }
+      threat: {
+        label: "Amenaça",
+        status: "Alerta",
+        color: "#c0392b",
+        text: "#fff",
+        desc: "Objectes de prioritat màxima.",
+        action: "Atura el pas i avisa l'operari per a la revisió manual."
+      },
+      review: {
+        label: "Revisió",
+        status: "En revisió",
+        color: "#f0a500",
+        text: "#000",
+        desc: "Cal revisar-los manualment.",
+        action: "Cal revisar manualment el contingut abans de deixar-lo passar."
+      },
+      safe: {
+        label: "Inofensiu",
+        status: "Autoritzat",
+        color: "#2e8b57",
+        text: "#fff",
+        desc: "Objectes quotidians i freqüents.",
+        action: "Cap acció necessària."
+      },
+      low: {
+        label: "Incert",
+        status: "Revisió manual",
+        color: "#f0a500",
+        text: "#000",
+        desc: "",
+        action: "La confiança és inferior al " + Math.round(THRESHOLD * 100) + " %. Revisa la imatge manualment."
+      }
     };
-    const ORDER = { threat: 0, review: 1, safe: 2 };
+
+    const ORDER = {
+      threat: 0,
+      review: 1,
+      safe: 2
+    };
+
     function categoryOf(name) {
-      const n = name.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
+      const n = name.normalize("NFD")
+        .replace(/[\u0300-\u036f]/g, "")
+        .toLowerCase();
+
       if (/tisor|tijera|ganivet|navaja|cuchill|arma|pistola|foc/.test(n)) return "threat";
       if (/pols|polvo|narcot|ampolla|liquid|botella/.test(n)) return "review";
+
       return "safe";
     }
+
     const pct = (p) => (p * 100).toFixed(1).replace(".", ",") + " %";
     const $ = (id) => document.getElementById(id);
-    const paint = (el, key) => { el.style.setProperty("--c", CAT[key].color); el.style.setProperty("--t", CAT[key].text); };
 
-    const fileInput = $("fileInput"), uploadBtn = $("uploadBtn"), camBtn = $("camBtn"), snapBtn = $("snapBtn"), stopBtn = $("stopBtn"),
-          preview = $("preview"), video = $("video"), frame = $("frame"), hint = $("hint"), HINT = hint.textContent;
-    let model, classNames = [], history = [], total = 0, alerts = 0, busy = false, emergency = false,
-        stream = null, fromHistory = false, lastStatus = "Carregant el model…";
+    const paint = (el, key) => {
+      el.style.setProperty("--c", CAT[key].color);
+      el.style.setProperty("--t", CAT[key].text);
+    };
 
-    function setStatus(text) { lastStatus = text; if (!emergency) $("status").textContent = text; }
-    function mk(tag, text, cls) { const e = document.createElement(tag); if (text !== undefined) e.textContent = text; if (cls) e.className = cls; return e; }
+    const fileInput = $("fileInput");
+    const uploadBtn = $("uploadBtn");
+    const camBtn = $("camBtn");
+    const snapBtn = $("snapBtn");
+    const stopBtn = $("stopBtn");
 
-    // ---- Càrrega del model ----
-    async function init() {
-      if (location.protocol === "file:") { setStatus("Obre la pàgina amb un servidor local (p. ex. python -m http.server)"); return; }
-      model = await tmImage.load(URL + "model.json", URL + "metadata.json");
-      classNames = model.getClassLabels ? model.getClassLabels() : [];
-      renderClasses();
-      fileInput.disabled = false; camBtn.disabled = false; uploadBtn.removeAttribute("aria-disabled");
-      $("folderInput").disabled = false; $("folderBtn").removeAttribute("aria-disabled");
-      setStatus("Model carregat");
+    const preview = $("preview");
+    const video = $("video");
+    const frame = $("frame");
+    const hint = $("hint");
+    const HINT = hint.textContent;
+
+    let model;
+    let classNames = [];
+    let history = [];
+    let total = 0;
+    let alerts = 0;
+    let busy = false;
+    let emergency = false;
+    let stream = null;
+    let fromHistory = false;
+    let lastStatus = "Carregant el model…";
+
+    function setStatus(text) {
+      lastStatus = text;
+      if (!emergency) $("status").textContent = text;
     }
+
+    function mk(tag, text, cls) {
+      const e = document.createElement(tag);
+      if (text !== undefined) e.textContent = text;
+      if (cls) e.className = cls;
+      return e;
+    }
+
+
+    // ---- Càrrega i canvi de model ----
+
+    async function loadModel(version) {
+
+      if (busy || emergency) {
+        $("modelSelect").value = currentVersion;
+        return;
+      }
+
+      stopCamera();
+
+      const previousModel = model;
+
+      setStatus("Carregant el model " + version + ".0...");
+      $("modelSelect").disabled = true;
+
+      try {
+
+        const path = MODEL_PATHS[version];
+
+        const newModel = await tmImage.load(
+          path + "model.json",
+          path + "metadata.json"
+        );
+
+        // Només substituïm el model quan la càrrega ha funcionat
+        model = newModel;
+        currentVersion = version;
+
+        classNames = model.getClassLabels
+          ? model.getClassLabels()
+          : [];
+
+        // Reiniciar estadístiques i historial
+        history = [];
+        total = 0;
+        alerts = 0;
+
+        $("stats").textContent =
+          "Anàlisis: 0 · Alertes vermelles: 0";
+
+        $("result").replaceChildren();
+
+        $("history").replaceChildren(
+          mk("li", "Encara no hi ha cap anàlisi.", "note")
+        );
+
+        // Actualitzar classes i categories
+        renderClasses();
+
+        // Eliminar les dades de validació anteriors
+        valRows = [];
+
+        valUrls.forEach((u) => window.URL.revokeObjectURL(u));
+        valUrls = [];
+
+        $("thumbs").replaceChildren();
+        copyBtn.disabled = true;
+        valStatus.textContent = "";
+
+        // Reactivar controls
+        fileInput.disabled = false;
+        camBtn.disabled = false;
+        uploadBtn.removeAttribute("aria-disabled");
+
+        folderInput.disabled = false;
+        $("folderBtn").removeAttribute("aria-disabled");
+
+        // Actualitzar identificació de versió
+        $("modelSelect").value = version;
+
+        setStatus("Model " + version + ".0 carregat");
+
+      } catch (error) {
+
+        console.error("Error carregant el model:", error);
+
+        // Recuperar el model anterior
+        model = previousModel;
+
+        $("modelSelect").value = currentVersion;
+
+        if (previousModel) {
+          setStatus("Error carregant el nou model. Es manté el model anterior.");
+        } else {
+          setStatus("No s'ha pogut carregar el model");
+        }
+
+      } finally {
+        $("modelSelect").disabled = false;
+      }
+    }
+
+
+    async function init() {
+
+      if (location.protocol === "file:") {
+        setStatus("Obre la pàgina amb un servidor local (p. ex. python -m http.server)");
+        return;
+      }
+
+      await loadModel("1");
+    }
+
 
     // ---- Entrada d'imatge ----
+
     function loadFile(file) {
+
       if (!file || !file.type.startsWith("image/") || !model || busy || emergency) return;
+
       stopCamera();
+
       const reader = new FileReader();
-      reader.onload = (e) => { if (preview.src === e.target.result) classify(); else preview.src = e.target.result; };
+
+      reader.onload = (e) => {
+        if (preview.src === e.target.result) {
+          classify();
+        } else {
+          preview.src = e.target.result;
+        }
+      };
+
       reader.readAsDataURL(file);
     }
-    fileInput.addEventListener("change", (e) => { loadFile(e.target.files[0]); fileInput.value = ""; });
+
+    fileInput.addEventListener("change", (e) => {
+      loadFile(e.target.files[0]);
+      fileInput.value = "";
+    });
+
     document.body.addEventListener("dragover", (e) => e.preventDefault());
-    document.body.addEventListener("drop", (e) => { e.preventDefault(); loadFile(e.dataTransfer.files[0]); });
-    preview.addEventListener("load", () => { if (fromHistory) { fromHistory = false; return; } classify(); });
+
+    document.body.addEventListener("drop", (e) => {
+      e.preventDefault();
+      loadFile(e.dataTransfer.files[0]);
+    });
+
+    preview.addEventListener("load", () => {
+      if (fromHistory) {
+        fromHistory = false;
+        return;
+      }
+
+      classify();
+    });
+
 
     // ---- Càmera ----
+
     async function startCamera() {
+
       if (busy || stream || emergency) return;
+
       if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-        hint.textContent = "Aquest navegador o aquesta adreça no permet usar la càmera (cal HTTPS o localhost)."; hint.hidden = false; return;
+        hint.textContent = "Aquest navegador o aquesta adreça no permet usar la càmera (cal HTTPS o localhost).";
+        hint.hidden = false;
+        return;
       }
-      try { stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment" }, audio: false }); }
-      catch (err) { console.error(err); hint.textContent = "No s'ha pogut accedir a la càmera. Comprova els permisos."; hint.hidden = false; return; }
-      video.srcObject = stream; video.hidden = false; hint.hidden = true;
-      camBtn.hidden = true; snapBtn.hidden = false; stopBtn.hidden = false;
+
+      try {
+        stream = await navigator.mediaDevices.getUserMedia({
+          video: { facingMode: "environment" },
+          audio: false
+        });
+      } catch (err) {
+        console.error(err);
+        hint.textContent = "No s'ha pogut accedir a la càmera. Comprova els permisos.";
+        hint.hidden = false;
+        return;
+      }
+
+      video.srcObject = stream;
+      video.hidden = false;
+      hint.hidden = true;
+
+      camBtn.hidden = true;
+      snapBtn.hidden = false;
+      stopBtn.hidden = false;
     }
+
     function stopCamera() {
-      if (stream) stream.getTracks().forEach((t) => t.stop());
-      stream = null; video.srcObject = null; video.hidden = true;
-      camBtn.hidden = false; snapBtn.hidden = true; stopBtn.hidden = true;
-      hint.textContent = HINT; hint.hidden = !preview.hidden;
+
+      if (stream) {
+        stream.getTracks().forEach((t) => t.stop());
+      }
+
+      stream = null;
+      video.srcObject = null;
+      video.hidden = true;
+
+      camBtn.hidden = false;
+      snapBtn.hidden = true;
+      stopBtn.hidden = true;
+
+      hint.textContent = HINT;
+      hint.hidden = !preview.hidden;
     }
+
     function snap() {
+
       if (!stream || !video.videoWidth) return;
+
       const canvas = document.createElement("canvas");
-      canvas.width = video.videoWidth; canvas.height = video.videoHeight;
+
+      canvas.width = video.videoWidth;
+      canvas.height = video.videoHeight;
+
       canvas.getContext("2d").drawImage(video, 0, 0);
+
       const url = canvas.toDataURL("image/jpeg", 0.92);
-      stopCamera(); preview.hidden = false; hint.hidden = true;
-      if (preview.src === url) classify(); else preview.src = url;
+
+      stopCamera();
+
+      preview.hidden = false;
+      hint.hidden = true;
+
+      if (preview.src === url) {
+        classify();
+      } else {
+        preview.src = url;
+      }
     }
-    camBtn.addEventListener("click", startCamera); snapBtn.addEventListener("click", snap); stopBtn.addEventListener("click", stopCamera);
+
+    camBtn.addEventListener("click", startCamera);
+    snapBtn.addEventListener("click", snap);
+    stopBtn.addEventListener("click", stopCamera);
+
 
     // ---- Classificació ----
-    function verdict(best) { return best.probability < THRESHOLD ? "low" : categoryOf(best.className); }
-    async function classify() {
-      busy = true; preview.hidden = false; hint.hidden = true; frame.classList.add("scanning");
-      const pause = new Promise((r) => setTimeout(r, 700)); // deixa veure l'escaneig
-      try {
-        const [prediction] = await Promise.all([model.predict(preview), pause]);
-        prediction.sort((a, b) => b.probability - a.probability);
-        const entry = { src: preview.src, prediction, time: new Date(), id: "ESC-" + String(++total).padStart(4, "0") };
-        if (verdict(prediction[0]) === "threat") alerts++;
-        history.unshift(entry); history = history.slice(0, 8);
-        show(entry); renderHistory();
-        $("stats").textContent = "Anàlisis: " + total + " · Alertes vermelles: " + alerts;
-      } catch (err) { console.error(err); $("result").textContent = "No s'ha pogut classificar la imatge."; }
-      frame.classList.remove("scanning"); busy = false;
+
+    function verdict(best) {
+      return best.probability < THRESHOLD
+        ? "low"
+        : categoryOf(best.className);
     }
 
+    async function classify() {
+
+      if (!model || busy || emergency) return;
+
+      busy = true;
+
+      preview.hidden = false;
+      hint.hidden = true;
+      frame.classList.add("scanning");
+
+      const pause = new Promise((r) => setTimeout(r, 700));
+
+      try {
+
+        const [prediction] = await Promise.all([
+          model.predict(preview),
+          pause
+        ]);
+
+        prediction.sort((a, b) => b.probability - a.probability);
+
+        const entry = {
+          src: preview.src,
+          prediction,
+          time: new Date(),
+          id: "ESC-" + String(++total).padStart(4, "0")
+        };
+
+        if (verdict(prediction[0]) === "threat") alerts++;
+
+        history.unshift(entry);
+        history = history.slice(0, 8);
+
+        show(entry);
+        renderHistory();
+
+        $("stats").textContent =
+          "Anàlisis: " + total + " · Alertes vermelles: " + alerts;
+
+      } catch (err) {
+
+        console.error(err);
+        $("result").textContent = "No s'ha pogut classificar la imatge.";
+
+      }
+
+      frame.classList.remove("scanning");
+      busy = false;
+    }
+
+
     // ---- Pintat ----
+
     function show(entry) {
+
       stopCamera();
-      const best = entry.prediction[0], key = verdict(best), c = CAT[key];
-      paint(frame, key); paint($("result"), key);
-      const r = $("result"); r.replaceChildren(
+
+      const best = entry.prediction[0];
+      const key = verdict(best);
+      const c = CAT[key];
+
+      paint(frame, key);
+      paint($("result"), key);
+
+      const r = $("result");
+
+      r.replaceChildren(
         mk("p", "Classe: " + best.className + " — Confiança: " + pct(best.probability), "main"),
         mk("span", c.status + " (" + c.label + ")", "badge"),
-        mk("p", c.action));
+        mk("p", c.action)
+      );
+
       document.querySelectorAll("#classList li").forEach((li) => {
-        const p = entry.prediction.find((x) => x.className === li.dataset.name);
+
+        const p = entry.prediction.find(
+          (x) => x.className === li.dataset.name
+        );
+
         li.classList.toggle("on", li.dataset.name === best.className);
+
         li.querySelector(".pc").textContent = p ? pct(p.probability) : "";
       });
     }
+
+
     function renderClasses() {
-      const sorted = [...classNames].sort((a, b) => ORDER[categoryOf(a)] - ORDER[categoryOf(b)]);
-      const list = $("classList"); list.replaceChildren();
+
+      const sorted = [...classNames].sort(
+        (a, b) => ORDER[categoryOf(a)] - ORDER[categoryOf(b)]
+      );
+
+      const list = $("classList");
+      list.replaceChildren();
+
       sorted.forEach((name) => {
-        const li = mk("li"); li.dataset.name = name; paint(li, categoryOf(name));
-        li.append(mk("span", name), mk("span", "", "pc")); list.appendChild(li);
+
+        const li = mk("li");
+
+        li.dataset.name = name;
+
+        paint(li, categoryOf(name));
+
+        li.append(
+          mk("span", name),
+          mk("span", "", "pc")
+        );
+
+        list.appendChild(li);
       });
-      const view = $("riskView"); view.replaceChildren();
+
+      const view = $("riskView");
+      view.replaceChildren();
+
       ["threat", "review", "safe"].forEach((key) => {
-        const names = sorted.filter((n) => categoryOf(n) === key), box = mk("section", undefined, "box risk"); paint(box, key);
-        const ul = mk("ul"); names.forEach((n) => { const li = mk("li", n); paint(li, key); ul.appendChild(li); });
-        box.append(mk("h2", CAT[key].label + " (" + names.length + ")"), mk("p", CAT[key].desc), ul); view.appendChild(box);
+
+        const names = sorted.filter(
+          (n) => categoryOf(n) === key
+        );
+
+        const box = mk("section", undefined, "box risk");
+
+        paint(box, key);
+
+        const ul = mk("ul");
+
+        names.forEach((n) => {
+          const li = mk("li", n);
+          paint(li, key);
+          ul.appendChild(li);
+        });
+
+        box.append(
+          mk("h2", CAT[key].label + " (" + names.length + ")"),
+          mk("p", CAT[key].desc),
+          ul
+        );
+
+        view.appendChild(box);
       });
     }
+
+
     function renderHistory() {
-      const ol = $("history"); ol.replaceChildren();
+
+      const ol = $("history");
+      ol.replaceChildren();
+
       history.forEach((entry) => {
-        const best = entry.prediction[0], key = verdict(best), li = mk("li"), b = mk("button",
-          entry.id + " · " + CAT[key].status + " · " + best.className + " · " + entry.time.toLocaleTimeString("ca-ES", { hour: "2-digit", minute: "2-digit" }));
-        b.type = "button"; paint(b, key);
+
+        const best = entry.prediction[0];
+        const key = verdict(best);
+        const li = mk("li");
+
+        const b = mk(
+          "button",
+          entry.id + " · " +
+          CAT[key].status + " · " +
+          best.className + " · " +
+          entry.time.toLocaleTimeString("ca-ES", {
+            hour: "2-digit",
+            minute: "2-digit"
+          })
+        );
+
+        b.type = "button";
+
+        paint(b, key);
+
         b.addEventListener("click", () => {
+
           if (busy) return;
-          if (preview.src !== entry.src) { fromHistory = true; preview.src = entry.src; }
+
+          if (preview.src !== entry.src) {
+            fromHistory = true;
+            preview.src = entry.src;
+          }
+
           show(entry);
         });
-        li.appendChild(b); ol.appendChild(li);
+
+        li.appendChild(b);
+        ol.appendChild(li);
       });
     }
 
 
     // ---- Validació per carpeta ----
-    // Atenció: "URL" és el nom de la carpeta del model, per això s'usa window.URL per als fitxers locals
-    const folderInput = $("folderInput"), copyBtn = $("copyBtn"), valStatus = $("valStatus");
-    let valRows = [], valUrls = [];
+
+    const folderInput = $("folderInput");
+    const copyBtn = $("copyBtn");
+    const valStatus = $("valStatus");
+
+    let valRows = [];
+    let valUrls = [];
+
     folderInput.addEventListener("change", async (e) => {
-      const files = [...e.target.files].filter((f) => f.type.startsWith("image/"))
-        .sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }));
+
+      const files = [...e.target.files]
+        .filter((f) => f.type.startsWith("image/"))
+        .sort((a, b) =>
+          a.name.localeCompare(b.name, undefined, { numeric: true })
+        );
+
       folderInput.value = "";
-      if (!files.length) { valStatus.textContent = "No s'ha trobat cap imatge a la carpeta."; return; }
-      if (!model || busy || emergency) return;
-      busy = true; copyBtn.disabled = true; valRows = [];
-      valUrls.forEach((u) => window.URL.revokeObjectURL(u)); valUrls = [];
-      $("thumbs").replaceChildren();
-      for (let i = 0; i < files.length; i++) {
-        if (emergency) { valStatus.textContent = "Aturat per emergència."; break; }
-        valStatus.textContent = "Analitzant " + (i + 1) + " de " + files.length + "…";
-        const url = window.URL.createObjectURL(files[i]); valUrls.push(url);
-        const card = mk("div", undefined, "thumb"), img = document.createElement("img");
-        img.alt = ""; img.src = url; card.appendChild(img); $("thumbs").appendChild(card);
-        try {
-          await img.decode();
-          const best = (await model.predict(img)).sort((a, b) => b.probability - a.probability)[0];
-          paint(card, verdict(best));
-          const info = mk("div"); info.append(mk("b", best.className), mk("span", pct(best.probability)), mk("small", files[i].name));
-          card.appendChild(info);
-          valRows.push([files[i].name, best.className, best.probability]);
-        } catch (err) { console.error(err); card.appendChild(mk("div", "Error amb la imatge")); }
+
+      if (!files.length) {
+        valStatus.textContent = "No s'ha trobat cap imatge a la carpeta.";
+        return;
       }
-      if (!emergency) valStatus.textContent = "Analitzades: " + valRows.length + " de " + files.length + " imatges.";
-      copyBtn.disabled = !valRows.length; busy = false;
+
+      if (!model || busy || emergency) return;
+
+      busy = true;
+      copyBtn.disabled = true;
+      valRows = [];
+
+      valUrls.forEach((u) => window.URL.revokeObjectURL(u));
+      valUrls = [];
+
+      $("thumbs").replaceChildren();
+
+      for (let i = 0; i < files.length; i++) {
+
+        if (emergency) {
+          valStatus.textContent = "Aturat per emergència.";
+          break;
+        }
+
+        valStatus.textContent =
+          "Analitzant " + (i + 1) + " de " + files.length + "…";
+
+        const url = window.URL.createObjectURL(files[i]);
+
+        valUrls.push(url);
+
+        const card = mk("div", undefined, "thumb");
+        const img = document.createElement("img");
+
+        img.alt = "";
+        img.src = url;
+
+        card.appendChild(img);
+        $("thumbs").appendChild(card);
+
+        try {
+
+          await img.decode();
+
+          const best = (await model.predict(img))
+            .sort((a, b) => b.probability - a.probability)[0];
+
+          paint(card, verdict(best));
+
+          const info = mk("div");
+
+          info.append(
+            mk("b", best.className),
+            mk("span", pct(best.probability)),
+            mk("small", files[i].name)
+          );
+
+          card.appendChild(info);
+
+          valRows.push([
+            files[i].name,
+            best.className,
+            best.probability
+          ]);
+
+        } catch (err) {
+
+          console.error(err);
+          card.appendChild(mk("div", "Error amb la imatge"));
+        }
+      }
+
+      if (!emergency) {
+        valStatus.textContent =
+          "Analitzades: " + valRows.length + " de " + files.length + " imatges.";
+      }
+
+      copyBtn.disabled = !valRows.length;
+      busy = false;
     });
+
+
     copyBtn.addEventListener("click", async () => {
-      const text = valRows.map(([n, c, p]) => n + "\t" + c + "\t" + p.toFixed(2).replace(".", ",")).join("\n");
-      try { await navigator.clipboard.writeText(text); valStatus.textContent = "Taula copiada (nom, classe predita, confiança): enganxa-la a l'Excel."; }
-      catch (err) { valStatus.textContent = "No s'ha pogut copiar (cal HTTPS o localhost)."; }
+
+      const text = valRows.map(
+        ([n, c, p]) =>
+          n + "\t" + c + "\t" + p.toFixed(2).replace(".", ",")
+      ).join("\n");
+
+      try {
+
+        await navigator.clipboard.writeText(text);
+
+        valStatus.textContent =
+          "Taula copiada (nom, classe predita, confiança): enganxa-la a l'Excel.";
+
+      } catch (err) {
+
+        valStatus.textContent =
+          "No s'ha pogut copiar (cal HTTPS o localhost).";
+      }
     });
+
+
+    // ---- Selector de versions ----
+
+    $("modelSelect").addEventListener("change", (e) => {
+      loadModel(e.target.value);
+    });
+
 
     // ---- Pestanyes ----
-    document.querySelectorAll(".tab").forEach((tab) => tab.addEventListener("click", () => {
-      stopCamera();
-      document.querySelectorAll(".tab").forEach((t) => t.classList.toggle("on", t === tab));
-      ["scan", "risk", "val"].forEach((k) => { $(k + "View").hidden = tab.dataset.tab !== k; });
-    }));
 
-    // ---- Emergència (bloqueja tota la web fins que es torna a prémer) ----
-    $("emergencyBtn").addEventListener("click", () => {
-      emergency = !emergency;
-      document.body.classList.toggle("emergency", emergency);
-      $("lock").hidden = !emergency;
-      $("emergencyBtn").textContent = emergency ? "Reprendre" : "Emergència";
-      if (emergency) { stopCamera(); $("status").textContent = "Emergència activa"; } else { $("status").textContent = lastStatus; }
+    document.querySelectorAll(".tab").forEach((tab) => {
+
+      tab.addEventListener("click", () => {
+
+        stopCamera();
+
+        document.querySelectorAll(".tab").forEach((t) => {
+          t.classList.toggle("on", t === tab);
+        });
+
+        ["scan", "risk", "val"].forEach((k) => {
+          $(k + "View").hidden = tab.dataset.tab !== k;
+        });
+      });
     });
 
-    init().catch((error) => { console.error("Error:", error); setStatus("No s'ha pogut carregar el model"); });
+
+    // ---- Emergència ----
+
+    $("emergencyBtn").addEventListener("click", () => {
+
+      emergency = !emergency;
+
+      document.body.classList.toggle("emergency", emergency);
+
+      $("lock").hidden = !emergency;
+
+      $("emergencyBtn").textContent =
+        emergency ? "Reprendre" : "Emergència";
+
+      if (emergency) {
+        stopCamera();
+        $("status").textContent = "Emergència activa";
+      } else {
+        $("status").textContent = lastStatus;
+      }
+    });
+
+
+    // ---- Inicialització ----
+
+    init().catch((error) => {
+      console.error("Error:", error);
+      setStatus("No s'ha pogut carregar el model");
+    });
+
   </script>
 </body>
 </html>

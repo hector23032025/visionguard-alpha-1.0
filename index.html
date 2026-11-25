@@ -143,6 +143,34 @@
       safe: 2
     };
 
+    // Traducció només visual (castellà -> català). El model no es toca.
+    // Les claus es comparen sense accents, majúscules ni espais, i hi ha variants habituals.
+    const norm = (t) => t.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().replace(/\s+/g, " ").trim();
+
+    const TRAD_RAW = {
+      "Arma De Foc":  ["arma de fuego", "arma", "pistola"],
+      "Ganivet (Arma blanca)": ["cuchillo (arma blanca)", "navaja (arma blanca)", "ganivet (arma blanca)"],
+      "Tisores (Arma blanca)": ["tijeras (arma blanca)", "tisores (arma blanca)"],
+      "Ganivet":      ["cuchillo", "navaja", "cuchillo navaja"],
+      "Tisores":      ["tijeras", "tijera"],
+      "Ampolla":      ["botella", "botella de liquido", "botella liquido"],
+      "Pols":         ["polvo", "polvos"],
+      "Cartera":      ["cartera", "billetera"],
+      "Claus":        ["llaves", "llave"],
+      "Llibre":       ["libro", "libros"],
+      "Mòbil":        ["movil", "telefono", "telefono movil", "celular", "smartphone"],
+      "Portàtil":     ["portatil", "ordenador", "ordenador portatil", "laptop"]
+    };
+
+    const TRAD = {};
+    Object.entries(TRAD_RAW).forEach(([cat, variants]) => {
+      TRAD[norm(cat)] = cat;
+      variants.forEach((v) => { TRAD[norm(v)] = cat; });
+    });
+
+    // Mostra el nom en català si el coneixem; si no, deixa el nom original
+    const display = (n) => TRAD[norm(n)] || n;
+
     function categoryOf(name) {
       const n = name.normalize("NFD")
         .replace(/[\u0300-\u036f]/g, "")
@@ -502,7 +530,7 @@
       const r = $("result");
 
       r.replaceChildren(
-        mk("p", "Classe: " + best.className + " — Confiança: " + pct(best.probability), "main"),
+        mk("p", "Classe: " + display(best.className) + " — Confiança: " + pct(best.probability), "main"),
         mk("span", c.status + " (" + c.label + ")", "badge"),
         mk("p", c.action)
       );
@@ -538,7 +566,7 @@
         paint(li, categoryOf(name));
 
         li.append(
-          mk("span", name),
+          mk("span", display(name)),
           mk("span", "", "pc")
         );
 
@@ -561,7 +589,7 @@
         const ul = mk("ul");
 
         names.forEach((n) => {
-          const li = mk("li", n);
+          const li = mk("li", display(n));
           paint(li, key);
           ul.appendChild(li);
         });
@@ -592,7 +620,7 @@
           "button",
           entry.id + " · " +
           CAT[key].status + " · " +
-          best.className + " · " +
+          display(best.className) + " · " +
           entry.time.toLocaleTimeString("ca-ES", {
             hour: "2-digit",
             minute: "2-digit"
@@ -691,7 +719,7 @@
           const info = mk("div");
 
           info.append(
-            mk("b", best.className),
+            mk("b", display(best.className)),
             mk("span", pct(best.probability)),
             mk("small", files[i].name)
           );
@@ -700,7 +728,7 @@
 
           valRows.push([
             files[i].name,
-            best.className,
+            display(best.className),
             best.probability
           ]);
 
